@@ -1,84 +1,48 @@
 import cv2
 from ultralytics import YOLO
-import datetime
-import os
-from flask import Flask, jsonify
 
-# Flask 애플리케이션 생성
-app = Flask(__name__)
-
-# YOLO 모델 로드
+# YOLO 학습된 모델 로드
 model = YOLO("C:/Parking Detection/best.pt")
 
-@app.route('/detect', methods=['POST'])
-def detect():
-    cap = cv2.VideoCapture(0)  # 웹캠을 통해 객체 탐지
-    if not cap.isOpened():
-        return jsonify({"error": "웹캠을 열 수 없습니다."}), 500
+# 웹캠 열기
+cap = cv2.VideoCapture(0)
 
-    frame_count = 0
-    capture_interval = 100
-    evidence_dir = 'evidence_photos'
-    if not os.path.exists(evidence_dir):
-        os.makedirs(evidence_dir)
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        print("프레임을 읽는 도중 오류가 발생했습니다.")
+        break
 
-    violations = []  # 위반 사항을 기록할 리스트
+    # 객체 탐지
+    results = model(frame)
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    # 탐지 결과 처리
+    for result in results:
+        boxes = result.boxes.xyxy.numpy()
+        scores = result.boxes.conf.numpy()
+        classes = result.boxes.cls.numpy()
 
-        # 객체 탐지
-        results = model(frame)
+        for box, score, cls in zip(boxes, scores, classes):
+            x1, y1, x2, y2 = box  # 바운딩 박스 좌표
 
-        # 탐지 결과 처리
-        for result in results:
-            boxes = result.boxes.xyxy.numpy()
-            scores = result.boxes.conf.numpy()
-            classes = result.boxes.cls.numpy()
+            if score >= 0.5:  # 신뢰도가 0.5 이상일 때
+                if cls == 0:  # 점자 블록 클래스
+                    label = f'Block {score:.2f}'
+                    color = (0, 255, 0)
+                elif cls == 1:  # 횡단보도 클래스
+                    label = f'Crosswalk {score:.2f}'
+                    color = (0, 0, 255)
 
-            for box, score, cls in zip(boxes, scores, classes):
-                x1, y1, x2, y2 = box
+                # 바운딩 박스 그리기
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+                cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
 
-                if score >= 0.5:
-                    violation_type = "Unknown"
-                    if cls == 0:  # 점자 블록 클래스 ID
-                        violation_type = "점자 블록 위반"
-                    elif cls == 1:  # 횡단보도 클래스 ID
-                        violation_type = "횡단보도 위반"
+    # 결과 화면에 표시
+    cv2.imshow('Braille Block and Crosswalk Detection', frame)
 
-                    # 위반 사항 기록
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    evidence_path = f"{evidence_dir}/frame_{frame_count}.jpg"
-                    cv2.imwrite(evidence_path, frame)
-                    latitude, longitude = 37.5665, 126.9780  # 임의의 값
+    # 'q' 키를 누르면 종료
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-                    violation = {
-                        "timestamp": timestamp,
-                        "violation_type": violation_type,
-                        "score": score,
-                        "evidence_path": evidence_path,
-                        "latitude": latitude,
-                        "longitude": longitude
-                    }
-                    violations.append(violation)
-                    print(violation)
-
-        # 결과 화면에 표시
-        cv2.imshow('Crosswalk and Braille Block Detection', frame)
-
-        # 'q' 키를 누르면 종료
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-        frame_count += 1
-        if frame_count % capture_interval == 0:
-            print(f'Processed {frame_count} frames')
-
-    cap.release()
-    cv2.destroyAllWindows()
-    return jsonify({"violations": violations})  # 감지된 위반 사항 반환
-
-if __name__ == '__main__':
-    app.run(port=5000)  # Flask 서버 실행
+cap.release()
+cv2.destroyAllWindows()
